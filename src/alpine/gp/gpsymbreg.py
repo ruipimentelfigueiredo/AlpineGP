@@ -407,16 +407,16 @@ class GPSymbolicRegressor():
                               self.predict_func, **args_predict_func)
 
     def __register_map(self):
-        def mapper(f, individuals, toolbox):
+        def mapper(f, individuals, toolbox_ref):
             fitnesses = []*len(individuals)
-            toolbox_ref = ray.put(toolbox)
             for i in range(0, len(individuals), self.batch_size):
                 individuals_batch = individuals[i:i+self.batch_size]
                 fitnesses.append(f(individuals_batch, toolbox_ref))
             fitnesses = list(chain(*ray.get(fitnesses)))
             return fitnesses
 
-        self.toolbox.register("map", mapper, toolbox=self.toolbox)
+        toolbox_ref = ray.put(self.toolbox)
+        self.toolbox.register("map", mapper, toolbox_ref=toolbox_ref)
 
     def fit(self, train_data: Dataset, val_data: Dataset | None = None):
         """Fits the training data using GP-based symbolic regression."""

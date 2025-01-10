@@ -16,7 +16,8 @@ To this aim, it allows to exploit the **discrete calculus** framework defined an
 
 _AlpineGP_ has been introduced in the paper [_Discovering interpretable physical models
 with symbolic regression and discrete exterior calculus_](https://iopscience.iop.org/article/10.1088/2632-2153/ad1af2),
-along with several benchmark problems (heat transfer, linear elasticity, Euler's elastica).
+along with several benchmark problems (heat transfer, linear elasticity, Euler's
+elastica). Scripts to reproduce these benchmarks can be found [here](https://github.com/alucantonio/MLST2024_SRDEC).
 
 **Features**:
 - distributed computing provided by the [`ray`](https://www.ray.io) library;
