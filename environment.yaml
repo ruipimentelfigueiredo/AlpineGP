@@ -10,8 +10,6 @@ dependencies:
   - pygmo
   - python
   - python-gmsh
-  - petsc4py
-  - jupyterlab
   - trame
   - ipywidgets
   - scipy
@@ -27,3 +25,4 @@ dependencies:
       - ray
       - pygmsh
       - tox
+      - mygrad
