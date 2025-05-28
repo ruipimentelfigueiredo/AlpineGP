@@ -20,6 +20,8 @@ from mygrad._utils.lock_management import mem_guard_off
 
 from functools import partial
 
+import optuna
+
 num_cpus = 1
 num_runs = 1  # 20
 
@@ -167,7 +169,7 @@ def assign_attributes(individuals_batch, attributes):
         ind.fitness.values = attr["fitness"]
 
 
-def eval(problem, cfgfile, seed=42):
+def eval(problem, cfgfile, seed=42, grid_search=False):
 
     regressor_params, config_file_data = util.load_config_data(cfgfile)
 
@@ -213,6 +215,7 @@ def eval(problem, cfgfile, seed=42):
         pset_config=pset,
         fitness=compute_attributes,
         predict_func=predict,
+        score_func=compute_MSEs,
         common_data=common_params,
         callback_func=callback_func,
         print_log=True,
@@ -225,24 +228,45 @@ def eval(problem, cfgfile, seed=42):
         **regressor_params,
     )
 
+    if grid_search:
+        study = optuna.create_study(study_name=problem, direction="maximize")
+
+        param = {
+            "num_individuals": optuna.distributions.CategoricalDistribution([100, 200])
+        }
+
+        # wrap regressor inside an optuna CV search object
+        est = optuna.integration.OptunaSearchCV(
+            gpsr,
+            param,
+            cv=5,
+            study=study,
+            refit=True,
+            n_trials=2,
+            verbose=2,
+            timeout=3600,
+        )
+    else:
+        est = gpsr
+
     tic = time.time()
-    gpsr.fit(X_train_scaled, y_train_scaled)
+    est.fit(X_train_scaled, y_train_scaled)
     toc = time.time()
 
-    best = gpsr.get_best_individual()
+    best = est.best_estimator_.get_best_individual()
     if hasattr(best, "consts"):
         print("Best parameters = ", best.consts)
 
     print("Elapsed time = ", toc - tic)
     individuals_per_sec = (
-        (gpsr.get_last_gen() + 1)
+        (est.best_estimator_.get_last_gen() + 1)
         * gpsr.num_individuals
         * gpsr.num_islands
         / (toc - tic)
     )
     print("Individuals per sec = ", individuals_per_sec)
 
-    u_best = gpsr.predict(X_test_scaled)
+    u_best = est.predict(X_test_scaled)
 
     # de-scale outputs before computing errors
     if scaleXy:
@@ -253,7 +277,7 @@ def eval(problem, cfgfile, seed=42):
     print("MSE on the test set = ", MSE)
     print("R^2 on the test set = ", r2_test)
 
-    pred_train = gpsr.predict(X_train_scaled)
+    pred_train = est.predict(X_train_scaled)
 
     if scaleXy:
         pred_train = scaler_y.inverse_transform(pred_train.reshape(-1, 1)).flatten()
@@ -303,6 +327,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("problem", help="Name of the PMLB or Nguyen dataset.")
 
+    parser.add_argument(
+        "-gs",
+        action="store_true",
+        help="Perform grid search for hyperparameter tuning.",
+    )
+
     args = parser.parse_args()
 
     problem = args.problem
@@ -324,7 +354,10 @@ if __name__ == "__main__":
 
     for i, seed in enumerate(seeds):
         print("PROBLEM: ", problem)
-        r2_train, r2_test = eval(problem=problem, cfgfile=cfgfile, seed=seed)
+        print("seed: ", seed)
+        r2_train, r2_test = eval(
+            problem=problem, cfgfile=cfgfile, seed=seed, grid_search=args.gs
+        )
         r2_tests.append(r2_test)
 
         stats = {
