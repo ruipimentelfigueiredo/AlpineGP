@@ -22,9 +22,9 @@ elastica). Scripts to reproduce these benchmarks can be found [here](https://git
 **Features**:
 - distributed computing provided by the [`ray`](https://www.ray.io) library;
 - scikit-learn compatible interface;
-- hyperparameter configuration via YAML files;
+- hyperparameter configuration via YAML files and optimization via `optuna`;
 - support for custom operators (with/without strong-typing);
-- benchmark suite (Nguyen and SRBench) 
+- benchmark suite (Nguyen and SRBench).
 
 ## Installation
 
