@@ -253,13 +253,19 @@ def eval(problem, cfgfile, seed=42, grid_search=False):
     est.fit(X_train_scaled, y_train_scaled)
     toc = time.time()
 
-    best = est.best_estimator_.get_best_individual()
+    if grid_search:
+        best_estimator = est.best_estimator_
+    else:
+        best_estimator = est
+
+    best = best_estimator.get_best_individual()
+
     if hasattr(best, "consts"):
         print("Best parameters = ", best.consts)
 
     print("Elapsed time = ", toc - tic)
     individuals_per_sec = (
-        (est.best_estimator_.get_last_gen() + 1)
+        (best_estimator.get_last_gen() + 1)
         * gpsr.num_individuals
         * gpsr.num_islands
         / (toc - tic)
