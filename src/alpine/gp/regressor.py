@@ -10,16 +10,11 @@ from alpine.data import Dataset
 import os
 import ray
 import random
-from alpine.gp.util import (
-    mapper,
-    max_func,
-    min_func,
-    avg_func,
-    std_func,
-    fitness_value,
-)
+from alpine.gp.util import mapper, max_func, min_func, avg_func, std_func, fitness_value
+from alpine.gp.primitives import stringify_for_sympy
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_is_fitted, validate_data
+from sympy.parsing.sympy_parser import parse_expr
 
 
 # reducing the number of threads launched by fitness evaluations
@@ -66,6 +61,14 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
             individuals of each generation. It takes the population/batch of
             individuals and the list containing all the values of the attributes
             returned by the fitness evaluation function.
+        max_calls: Maximum number of tasks a Ray worker can execute before being
+            terminated and restarted. The default is 0, which means infinite number
+            of tasks.
+        custom_logger: A user-defined callable that handles logging or printing
+            messages. It accepts the list of best individuals of each generation.
+            The default is None.
+        sympy_conversion_rules: a dictionary of convertion rules to map a given set of
+            primitives to sympy primitives. The default is None.
     """
 
     def __init__(
@@ -108,8 +111,12 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
         save_best_individual: bool = False,
         save_train_fit_history: bool = False,
         output_path: str | None = None,
-        batch_size=1,
-        num_cpus=1,
+        batch_size: int = 1,
+        num_cpus: int = 1,
+        max_calls: int = 0,
+        custom_logger: Callable = None,
+        special_term_name: str = "c",
+        sympy_conversion_rules: Dict = None,
     ):
         super().__init__()
         self.pset_config = pset_config
@@ -161,6 +168,18 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
 
         self.seed_str = seed_str
         self.num_cpus = num_cpus
+        self.max_calls = max_calls
+        self.custom_logger = custom_logger
+        self.special_term_name = special_term_name
+        self.sympy_conversion_rules = sympy_conversion_rules
+
+    def __sklearn_tags__(self):
+        # since we are allowing cases in which y=None
+        # we need to modify the tag requires_y to False
+        # (check sklearn docs)
+        tags = super().__sklearn_tags__()
+        tags.target_tags.required = False
+        return tags
 
     @property
     def n_elitist(self):
@@ -359,7 +378,7 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
         # networkx.nx_agraph.write_dot(graph, "genealogy.dot")
 
     def __get_remote(self, f):
-        return (ray.remote(f)).options(num_cpus=self.num_cpus).remote
+        return ray.remote(num_cpus=self.num_cpus, max_calls=self.max_calls)(f).remote
 
     def __register_fitness_func(self, toolbox):
         store = self.__data_store
@@ -391,7 +410,7 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
     # @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y=None, X_val=None, y_val=None):
         """Fits the training data using GP-based symbolic regression."""
-        X, y = validate_data(
+        validated_data = validate_data(
             self,
             X,
             y,
@@ -401,6 +420,12 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
             # allow_nd=True,
             # multi_output=True,
         )
+        if y is None:
+            X = validated_data
+            train_data = {"X": X}
+        else:
+            X, y = validated_data
+            train_data = {"X": X, "y": y}
 
         # config individual creator and toolbox
         toolbox, pset = self.__creator_toolbox_pset_config()
@@ -439,7 +464,6 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
         self.__plot_initialized = False
         self.__fig_id = 0
 
-        train_data = {"X": X, "y": y}
         if self.validate and X_val is not None:
             val_data = {"X": X_val, "y": y_val}
             datasets = {"train": train_data, "val": val_data}
@@ -467,16 +491,21 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
         )[0]
         return u_best
 
-    def score(self, X, y):
+    def score(self, X, y=None):
         """Computes the error metric (passed to the `GPSymbolicRegressor` constructor)
         on a given dataset.
         """
         check_is_fitted(self)
         toolbox, pset = self.__creator_toolbox_pset_config()
-        X, y = validate_data(
+        validated_data = validate_data(
             self, X, y, accept_sparse=False, reset=False, skip_check_array=True
         )
-        test_data = {"X": X, "y": y}
+        if y is None:
+            X = validated_data
+            test_data = {"X": X}
+        else:
+            X, y = validated_data
+            test_data = {"X": X, "y": y}
         store = self.__data_store
         args_score_func = self.__fetch_shared_objects(store["common"]) | test_data
         score = self.score_func((self.__best,), toolbox=toolbox, **args_score_func)[0]
@@ -595,7 +624,7 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
                     ind.fitness.values = fit
 
         if self.validate:
-            print("Using validation dataset.")
+            print("Using validation dataset.", flush=True)
 
         print("DONE.", flush=True)
 
@@ -618,7 +647,9 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
             if self.print_log:
                 print("Best individuals of this generation:", flush=True)
                 for i in range(self.num_best_inds_str):
-                    print(str(best_inds[i]))
+                    print(str(best_inds[i]), flush=True)
+                if self.custom_logger is not None:
+                    self.custom_logger(best_inds)
 
             # Update history of best fitness and best validation error
             self.__train_fit_history = self.__logbook.chapters["fitness"].select("min")
@@ -650,7 +681,7 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
             self.__best = best_inds[0]
 
             if self.__best.fitness.values[0] <= 1e-15:
-                print("EARLY STOPPING.")
+                print("EARLY STOPPING.", flush=True)
                 break
 
         self.__plot_initialized = False
@@ -658,11 +689,29 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
 
         self.__last_gen = self.__cgen
 
-        print(f"The best individual is {self.__best}", flush=True)
-        print(f"The best fitness on the training set is {self.__train_fit_history[-1]}")
+        # define sympy representation of the best individual
+        if self.sympy_conversion_rules is not None:
+            self.__best_sympy = parse_expr(
+                stringify_for_sympy(
+                    self.__best, self.sympy_conversion_rules, self.special_term_name
+                )
+            )
+            best_str = self.__best_sympy
+        else:
+            best_str = self.__best
+
+        print(f"The best individual is {best_str}", flush=True)
+
+        print(
+            f"The best fitness on the training set is {self.__train_fit_history[-1]}",
+            flush=True,
+        )
 
         if self.validate:
-            print(f"The best fitness on the validation set is {self.min_valerr}")
+            print(
+                f"The best fitness on the validation set is {self.min_valerr}",
+                flush=True,
+            )
 
         if self.plot_best_genealogy:
             self.__plot_genealogy(self.__best)
@@ -672,11 +721,11 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
 
         if self.save_best_individual and self.output_path is not None:
             self.__save_best_individual(self.output_path)
-            print("String of the best individual saved to disk.")
+            print("String of the best individual saved to disk.", flush=True)
 
         if self.save_train_fit_history and self.output_path is not None:
             self.__save_train_fit_history(self.output_path)
-            print("Training fitness history saved to disk.")
+            print("Training fitness history saved to disk.", flush=True)
 
         # NOTE: ray.shutdown should be manually called by the user
 

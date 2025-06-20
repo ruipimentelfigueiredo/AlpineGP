@@ -126,10 +126,11 @@ def compile_individual_with_consts(tree, toolbox, special_term_name="c"):
     const_idx = 0
     tree_clone = toolbox.clone(tree)
     for i, node in enumerate(tree_clone):
-        if isinstance(node, gp.Terminal) and node.name[0:3] != "ARG":
+        if isinstance(node, gp.Terminal) and not node.name.startswith("ARG"):
             if node.name == special_term_name:
-                new_node_name = special_term_name + "[" + str(const_idx) + "]"
-                tree_clone[i] = gp.Terminal(new_node_name, True, float)
+                tree_clone[i] = gp.Terminal(
+                    f"{special_term_name}[{const_idx}]", True, float
+                )
                 const_idx += 1
 
     individual = toolbox.compile(expr=tree_clone, extra_args=[special_term_name])
