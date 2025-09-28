@@ -502,8 +502,8 @@ class GPSymbolicRegressor(RegressorMixin, BaseEstimator):
                 self.mut_prob,
             )
 
-            # add individuals subject to cross-over and mutation to the list of invalids
-            invalid_inds[i] = [ind for ind in offsprings[i] if not ind.fitness.valid]
+            # add all individuals to the list of invalids
+            invalid_inds[i] = [ind for ind in offsprings[i]]
 
             num_evals += len(invalid_inds[i])
 
